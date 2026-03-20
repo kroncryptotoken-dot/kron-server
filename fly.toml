@@ -1,4 +1,4 @@
-app = "kron-strike-server"
+app = "kron-game-server"
 primary_region = "ams"
 
 [build]
