@@ -141,7 +141,7 @@ class KronRoom extends Room {
     });
 
     // 20fps tick
-    this.setSimulationInterval((dt) => this.tick(dt), 50);
+    this.setSimulationInterval((dt) => this.tick(dt), 33);
     console.log('KronRoom created');
   }
 
