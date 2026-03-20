@@ -1,8 +1,6 @@
 const { Room } = require('colyseus');
 
-// ═══════════════════════════════════════════════
 // PHYSICS CONSTANTS
-// ═══════════════════════════════════════════════
 const DISC_FRIC = 0.978;
 const BALL_FRIC = 0.983;
 const REST      = 0.78;
@@ -12,7 +10,7 @@ const BALL_MASS = 1.0;
 const WIN_SCORE = 3;
 const MAX_SPEED = 10;
 
-// Fixed physics world — screen independent
+// Fixed physics world
 const PW   = 600;
 const PH   = 340;
 const PGH  = PH * 0.42;
@@ -21,8 +19,8 @@ const PGY2 = PGY1 + PGH;
 const PGD  = PW * 0.048;
 const PFL  = PGD;
 const PFR  = PW - PGD;
-const DR   = PH * 0.085; // disc radius
-const BR   = PH * 0.046; // ball radius
+const DR   = PH * 0.085;
+const BR   = PH * 0.046;
 
 function mkDisc(x, y, own) {
   return { x, y, vx: 0, vy: 0, r: DR, mass: DISC_MASS, own };
@@ -55,24 +53,19 @@ function collide(a, b) {
   const dist = Math.sqrt(dx*dx + dy*dy);
   const minDist = a.r + b.r;
   if (dist >= minDist || dist < 0.01) return;
-
   const nx = dx / dist, ny = dy / dist;
   const overlap = minDist - dist;
   const ma = a.mass, mb = b.mass, mt = ma + mb;
-
   a.x -= nx * overlap * (mb/mt) * 1.05;
   a.y -= ny * overlap * (mb/mt) * 1.05;
   b.x += nx * overlap * (ma/mt) * 1.05;
   b.y += ny * overlap * (ma/mt) * 1.05;
-
   const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
   const vDotN = dvx*nx + dvy*ny;
   if (vDotN >= 0) return;
-
   const imp = Math.min(-(1 + REST) * vDotN / (1/ma + 1/mb), MAX_SPEED * mt * 1.5);
   a.vx -= imp/ma * nx; a.vy -= imp/ma * ny;
   b.vx += imp/mb * nx; b.vy += imp/mb * ny;
-
   [a, b].forEach(o => {
     const sp = Math.sqrt(o.vx*o.vx + o.vy*o.vy);
     if (sp > MAX_SPEED) { o.vx = o.vx/sp * MAX_SPEED; o.vy = o.vy/sp * MAX_SPEED; }
@@ -99,21 +92,21 @@ function initPositions() {
   };
 }
 
-// ═══════════════════════════════════════════════
-// KRON ROOM
-// ═══════════════════════════════════════════════
 class KronRoom extends Room {
 
   onCreate(options) {
     this.maxClients = 2;
     this.seatReservationTime = 30;
-    this.gs = null;       // game state
-    this.roles = {};      // sessionId -> 'host' | 'guest'
+    this.gs = null;
+    this.roles = {};
     this.tickCount = 0;
 
+    // MOVE: only accept in waiting phase, correct turn, not locked
     this.onMessage('move', (client, data) => {
-      console.log('move received from', this.roles[client.sessionId], 'phase:', this.gs ? this.gs.phase : 'no gs');
-      if (!this.gs || this.gs.phase === 'simulating' || this.gs.phase === 'goal_pause') return;
+      if (!this.gs) return;
+      if (this.gs.phase !== 'waiting') return;
+      if (this.gs.moveLocked) return;
+
       const role = this.roles[client.sessionId];
       if (!role) return;
 
@@ -127,23 +120,27 @@ class KronRoom extends Room {
       const speed = Math.sqrt(data.vx*data.vx + data.vy*data.vy);
       if (!isFinite(speed) || speed < 0.05 || speed > MAX_SPEED * 1.05) return;
 
+      // Lock immediately — no more moves until turn_change
+      this.gs.moveLocked = true;
       disc.vx = data.vx;
       disc.vy = data.vy;
       this.gs.phase = 'simulating';
       this.gs.lastT = myTurn;
+      console.log(`move accepted from ${role}, speed: ${speed.toFixed(2)}`);
     });
 
+    // PASS: timeout
     this.onMessage('pass', (client) => {
-      if (!this.gs) return;
+      if (!this.gs || this.gs.phase !== 'waiting') return;
       const role = this.roles[client.sessionId];
       const myTurn = role === 'host' ? 'p' : 'o';
-      if (this.gs.turn === myTurn) {
-        this.gs.phase = 'simulating';
-        this.gs.lastT = myTurn;
-      }
+      if (this.gs.turn !== myTurn) return;
+      this.gs.moveLocked = true;
+      this.gs.phase = 'simulating';
+      this.gs.lastT = myTurn;
     });
 
-    // Physics + broadcast at 20fps
+    // 20fps tick
     this.setSimulationInterval((dt) => this.tick(dt), 50);
     console.log('KronRoom created');
   }
@@ -154,7 +151,6 @@ class KronRoom extends Room {
     this.roles[client.sessionId] = role;
     client.send('role', { role });
     console.log(`${client.sessionId} joined as ${role}`);
-
     if (Object.keys(this.roles).length === 2) {
       this.startGame();
     }
@@ -176,7 +172,8 @@ class KronRoom extends Room {
       score: { p: 0, o: 0 },
       turn: 'p',
       lastT: 'p',
-      phase: 'waiting', // waiting | simulating | goal_pause
+      phase: 'waiting',     // waiting | simulating | goal_pause
+      moveLocked: false,
       goalPauseTimer: 0,
       goalKickTeam: null,
     };
@@ -188,7 +185,7 @@ class KronRoom extends Room {
     if (!this.gs) return;
     const gs = this.gs;
 
-    // Goal pause
+    // Goal pause countdown
     if (gs.phase === 'goal_pause') {
       gs.goalPauseTimer -= dt;
       if (gs.goalPauseTimer <= 0) {
@@ -203,15 +200,15 @@ class KronRoom extends Room {
         gs.turn = gs.goalKickTeam;
         gs.lastT = gs.goalKickTeam;
         gs.phase = 'waiting';
+        gs.moveLocked = false;
         gs.goalKickTeam = null;
         this.broadcast('state', this.snapshot('reset'));
       }
       return;
     }
 
-    // Waiting for move
+    // Waiting — send idle tick every 200ms so clients stay synced
     if (gs.phase === 'waiting') {
-      // Still send state so clients stay in sync
       this.tickCount++;
       if (this.tickCount % 4 === 0) {
         this.broadcast('state', this.snapshot('idle'));
@@ -275,16 +272,17 @@ class KronRoom extends Room {
     // Broadcast tick
     this.broadcast('state', this.snapshot('tick'));
 
-    // Movement stopped — switch turn
+    // Simulation done — switch turn, unlock
     if (!anyMov) {
       gs.turn = gs.lastT === 'p' ? 'o' : 'p';
       gs.lastT = gs.turn;
       gs.phase = 'waiting';
+      gs.moveLocked = false;
+      console.log('turn changed to:', gs.turn);
       this.broadcast('state', this.snapshot('turn_change'));
     }
   }
 
-  // Snapshot — coordinates as ratio (0-1), screen independent
   snapshot(reason) {
     const gs = this.gs;
     return {
