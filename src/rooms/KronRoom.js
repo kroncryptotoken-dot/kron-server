@@ -1,7 +1,7 @@
 const { Room } = require('colyseus');
 
 // ═══════════════════════════════════════════════
-// FİZİK SABİTLERİ — client ile tamamen aynı olmalı
+// PHYSICS CONSTANTS — must match client exactly
 // ═══════════════════════════════════════════════
 const DISC_FRIC = 0.978;
 const BALL_FRIC = 0.983;
@@ -13,7 +13,7 @@ const WIN_SCORE = 3;
 const TURN_SEC  = 30;
 const MAX_SPEED = 10;
 
-// Sabit fizik dünyası — client ekran boyutundan bağımsız
+// Fixed physics world — independent of client screen size
 const PW  = 600;
 const PH  = 340;
 const PGH = PH * 0.42;
@@ -26,7 +26,7 @@ const DISC_R = PH * 0.085;
 const BALL_R = PH * 0.046;
 
 // ═══════════════════════════════════════════════
-// YARDIMCI FONKSİYONLAR
+// HELPER FUNCTIONS
 // ═══════════════════════════════════════════════
 function mkDisc(x, y, own) {
   return { x, y, vx: 0, vy: 0, r: DISC_R, mass: DISC_MASS, own };
@@ -111,26 +111,26 @@ class KronRoom extends Room {
 
   onCreate(options) {
     this.maxClients = 2;
-    this.gameState  = null;  // fizik state — sadece server'da
+    this.gameState  = null;  // physics state — server only
     this.players    = {};    // sessionId -> role ('host'|'guest')
     this.physicsRunning = false;
 
-    // Client hamle mesajı — input ONLY: discIdx + vx + vy
+    // Client move message — input ONLY: discIdx + vx + vy
     this.onMessage('move', (client, data) => {
       if (!this.gameState || this.gameState.turn === 'wait') return;
       const role = this.players[client.sessionId];
       if (!role) return;
 
-      // Sıra kontrolü
+      // Turn check
       const myTurn = role === 'host' ? 'p' : 'o';
       if (this.gameState.turn !== myTurn) return;
 
-      // Disk al
+      // Get disc
       const arr = role === 'host' ? this.gameState.PD : this.gameState.OD;
       const disc = arr[data.discIdx];
       if (!disc) return;
 
-      // Hız doğrula
+      // Validate speed
       const speed = Math.sqrt(data.vx*data.vx + data.vy*data.vy);
       if (!isFinite(speed) || speed < 0.05 || speed > MAX_SPEED * 1.05) return;
 
@@ -139,7 +139,7 @@ class KronRoom extends Room {
       this.gameState.turn = 'wait';
       this.gameState.lastT = myTurn;
 
-      // Broadcast: hamle yapıldı
+      // Broadcast: move applied
       this.broadcast('move_applied', { role, discIdx: data.discIdx, vx: data.vx, vy: data.vy });
     });
 
@@ -154,7 +154,7 @@ class KronRoom extends Room {
       }
     });
 
-    // Fizik loop: 60fps
+    // Physics loop: 60fps
     this.setSimulationInterval((dt) => this.physicsUpdate(dt), 1000/60);
 
     console.log('KronRoom created');
@@ -167,7 +167,7 @@ class KronRoom extends Room {
     client.send('role', { role });
     console.log(`${client.sessionId} joined as ${role}`);
 
-    // İki oyuncu tamam → oyunu başlat
+    // Two players ready — start game
     if (Object.keys(this.players).length === 2) {
       this.startGame();
     }
@@ -176,7 +176,7 @@ class KronRoom extends Room {
   onLeave(client, consented) {
     const role = this.players[client.sessionId];
     delete this.players[client.sessionId];
-    // Karşı oyuncuya bildir
+    // Notify opponent
     this.broadcast('opponent_left', { role });
     this.physicsRunning = false;
     console.log(`${client.sessionId} (${role}) left`);
@@ -197,7 +197,7 @@ class KronRoom extends Room {
     };
     this.physicsRunning = true;
 
-    // İlk state gönder
+    // Send initial state
     this.broadcastState('start');
     console.log('Game started');
   }
@@ -206,7 +206,7 @@ class KronRoom extends Room {
     if (!this.physicsRunning || !this.gameState) return;
     const gs = this.gameState;
 
-    // Gol animasyonu bekleniyor
+    // Waiting for goal animation
     if (gs.glock) {
       gs.goalTimer -= dt;
       if (gs.goalTimer <= 0) {
@@ -220,7 +220,7 @@ class KronRoom extends Room {
         gs.lastT = gs.goalKickTeam;
         gs.goalKickTeam = null;
 
-        // Oyun bitti mi?
+        // Game over?
         if (gs.score.p >= WIN_SCORE || gs.score.o >= WIN_SCORE) {
           this.broadcastState('gameover');
           this.physicsRunning = false;
@@ -232,12 +232,12 @@ class KronRoom extends Room {
       return;
     }
 
-    if (gs.turn !== 'wait') return; // hamle bekleniyor
+    if (gs.turn !== 'wait') return; // waiting for move
 
-    // ── Fizik adımı ──────────────────────────
+    // ── Physics step ──────────────────────────
     let anyMov = false;
 
-    // Diskler
+    // Discs
     const allDiscs = gs.PD.concat(gs.OD);
     for (let i = 0; i < allDiscs.length; i++) {
       const d = allDiscs[i];
@@ -249,7 +249,7 @@ class KronRoom extends Room {
       if (mv(d)) anyMov = true; else { d.vx = 0; d.vy = 0; }
     }
 
-    // Top
+    // Ball
     gs.ball.x += gs.ball.vx; gs.ball.y += gs.ball.vy;
     gs.ball.vx *= BALL_FRIC; gs.ball.vy *= BALL_FRIC;
     if (Math.abs(gs.ball.vx) < 0.005) gs.ball.vx = 0;
@@ -257,7 +257,7 @@ class KronRoom extends Room {
     wallB(gs.ball);
     if (mv(gs.ball)) anyMov = true; else { gs.ball.vx = 0; gs.ball.vy = 0; }
 
-    // Çarpışma — sabit sıra
+    // Collision — fixed order
     const all = allDiscs.concat([gs.ball]);
     for (let pass = 0; pass < 3; pass++) {
       for (let i = 0; i < all.length - 1; i++) {
@@ -267,21 +267,21 @@ class KronRoom extends Room {
       }
     }
 
-    // Gol kontrolü
+    // Goal check
     const b = gs.ball;
     if (b.x - b.r <= PGD*0.25 && b.y > PGY1 && b.y < PGY2) {
-      // Sol kale — o takım gol attı (host'un kalesi)
+      // Left goal — team o scored (host's goal)
       gs.score.o++;
       gs.glock = true;
-      gs.goalTimer = 1200; // 1.2 saniye bekle
-      gs.goalKickTeam = 'p'; // gol yiyen başlar
+      gs.goalTimer = 1200; // wait 1.2 seconds
+      gs.goalKickTeam = 'p'; // team that conceded starts
       b.vx = 0; b.vy = 0;
       allDiscs.forEach(d => { d.vx = 0; d.vy = 0; });
       this.broadcastState('goal');
       return;
     }
     if (b.x + b.r >= PW - PGD*0.25 && b.y > PGY1 && b.y < PGY2) {
-      // Sağ kale — p takımı gol attı (guest'in kalesi)
+      // Right goal — team p scored (guest's goal)
       gs.score.p++;
       gs.glock = true;
       gs.goalTimer = 1200;
@@ -292,17 +292,17 @@ class KronRoom extends Room {
       return;
     }
 
-    // Hareket durdu → sıra değiştir
+    // Movement stopped — switch turn
     if (!anyMov) {
       gs.turn = gs.lastT === 'p' ? 'o' : 'p';
       gs.lastT = gs.turn;
       this.broadcastState('turn_change');
     } else {
-      // Hareket varken de state gönder (50ms'de bir — Colyseus bunu halleder)
+      // State sent during movement (every 50ms — handled by Colyseus)
     }
   }
 
-  // State'i oran (0-1) olarak gönder — ekran bağımsız
+  // Send state as ratio (0-1) — screen independent
   broadcastState(reason) {
     if (!this.gameState) return;
     const gs = this.gameState;
@@ -318,11 +318,11 @@ class KronRoom extends Room {
     });
   }
 
-  // Fizik koşurken de client'a pozisyon gönder (her 50ms)
-  // Colyseus'un setSimulationInterval bunu hallediyor ama
-  // biz broadcast'i physicsUpdate içinde çağırmak yerine
-  // setPatchRate ile düzenli state push yapabiliriz.
-  // Şimdilik move+goal eventlerinde broadcast yeterli.
+  // Send position to client during physics (every 50ms)
+  // Colyseus setSimulationInterval handles this but
+  // instead of calling broadcast inside physicsUpdate
+  // we can use setPatchRate for regular state push.
+  // For now, broadcast on move+goal events is sufficient.
 }
 
 module.exports = { KronRoom };
