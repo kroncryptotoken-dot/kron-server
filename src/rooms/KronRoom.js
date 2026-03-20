@@ -112,7 +112,8 @@ class KronRoom extends Room {
     this.tickCount = 0;
 
     this.onMessage('move', (client, data) => {
-      if (!this.gs || this.gs.phase !== 'playing') return;
+      console.log('move received from', this.roles[client.sessionId], 'phase:', this.gs ? this.gs.phase : 'no gs');
+      if (!this.gs || this.gs.phase === 'simulating' || this.gs.phase === 'goal_pause') return;
       const role = this.roles[client.sessionId];
       if (!role) return;
 
