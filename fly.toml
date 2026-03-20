@@ -1,0 +1,13 @@
+app = "kron-strike-server"
+primary_region = "ams"
+
+[build]
+
+[http_service]
+  internal_port = 2567
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+
+[[vm]]
+  size = "shared-cpu-1x"
