@@ -111,6 +111,7 @@ class KronRoom extends Room {
 
   onCreate(options) {
     this.maxClients = 2;
+    this.seatReservationTime = 30; // 30 seconds to join
     this.gameState  = null;  // physics state — server only
     this.players    = {};    // sessionId -> role ('host'|'guest')
     this.physicsRunning = false;
