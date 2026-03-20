@@ -1,6 +1,8 @@
 const { Room } = require('colyseus');
 
+// ═══════════════════════════════════════════════
 // PHYSICS CONSTANTS
+// ═══════════════════════════════════════════════
 const DISC_FRIC = 0.978;
 const BALL_FRIC = 0.983;
 const REST      = 0.78;
@@ -10,7 +12,7 @@ const BALL_MASS = 1.0;
 const WIN_SCORE = 3;
 const MAX_SPEED = 10;
 
-// Fixed physics world (screen independent)
+// Fixed physics world — screen independent
 const PW   = 600;
 const PH   = 340;
 const PGH  = PH * 0.42;
@@ -19,11 +21,11 @@ const PGY2 = PGY1 + PGH;
 const PGD  = PW * 0.048;
 const PFL  = PGD;
 const PFR  = PW - PGD;
-const DR   = PH * 0.085;
-const BR   = PH * 0.046;
+const DR   = PH * 0.085; // disc radius
+const BR   = PH * 0.046; // ball radius
 
-function mkDisc(x, y) {
-  return { x, y, vx: 0, vy: 0, r: DR, mass: DISC_MASS };
+function mkDisc(x, y, own) {
+  return { x, y, vx: 0, vy: 0, r: DR, mass: DISC_MASS, own };
 }
 
 function moving(o) {
@@ -51,77 +53,87 @@ function wallBall(b) {
 function collide(a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const dist = Math.sqrt(dx*dx + dy*dy);
-  const minD = a.r + b.r;
-  if (dist >= minD || dist < 0.01) return;
-  const nx = dx/dist, ny = dy/dist;
-  const ov = minD - dist;
+  const minDist = a.r + b.r;
+  if (dist >= minDist || dist < 0.01) return;
+
+  const nx = dx / dist, ny = dy / dist;
+  const overlap = minDist - dist;
   const ma = a.mass, mb = b.mass, mt = ma + mb;
-  a.x -= nx * ov * (mb/mt) * 1.05;
-  a.y -= ny * ov * (mb/mt) * 1.05;
-  b.x += nx * ov * (ma/mt) * 1.05;
-  b.y += ny * ov * (ma/mt) * 1.05;
+
+  a.x -= nx * overlap * (mb/mt) * 1.05;
+  a.y -= ny * overlap * (mb/mt) * 1.05;
+  b.x += nx * overlap * (ma/mt) * 1.05;
+  b.y += ny * overlap * (ma/mt) * 1.05;
+
   const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
-  const vn = dvx*nx + dvy*ny;
-  if (vn >= 0) return;
-  const imp = Math.min(-(1+REST)*vn/(1/ma+1/mb), MAX_SPEED*mt*1.5);
-  a.vx -= imp/ma*nx; a.vy -= imp/ma*ny;
-  b.vx += imp/mb*nx; b.vy += imp/mb*ny;
-  [a,b].forEach(o => {
-    const sp = Math.sqrt(o.vx*o.vx+o.vy*o.vy);
-    if (sp > MAX_SPEED) { o.vx=o.vx/sp*MAX_SPEED; o.vy=o.vy/sp*MAX_SPEED; }
+  const vDotN = dvx*nx + dvy*ny;
+  if (vDotN >= 0) return;
+
+  const imp = Math.min(-(1 + REST) * vDotN / (1/ma + 1/mb), MAX_SPEED * mt * 1.5);
+  a.vx -= imp/ma * nx; a.vy -= imp/ma * ny;
+  b.vx += imp/mb * nx; b.vy += imp/mb * ny;
+
+  [a, b].forEach(o => {
+    const sp = Math.sqrt(o.vx*o.vx + o.vy*o.vy);
+    if (sp > MAX_SPEED) { o.vx = o.vx/sp * MAX_SPEED; o.vy = o.vy/sp * MAX_SPEED; }
   });
 }
 
 function initPositions() {
   return {
     PD: [
-      mkDisc(PFL + DR*1.4,  PH*0.50),
-      mkDisc(PFL + PW*0.13, PH*0.27),
-      mkDisc(PFL + PW*0.13, PH*0.73),
-      mkDisc(PFL + PW*0.29, PH*0.34),
-      mkDisc(PFL + PW*0.29, PH*0.66),
+      mkDisc(PFL + DR*1.4,  PH*0.50, 'p'),
+      mkDisc(PFL + PW*0.13, PH*0.27, 'p'),
+      mkDisc(PFL + PW*0.13, PH*0.73, 'p'),
+      mkDisc(PFL + PW*0.29, PH*0.34, 'p'),
+      mkDisc(PFL + PW*0.29, PH*0.66, 'p'),
     ],
     OD: [
-      mkDisc(PFR - DR*1.4,  PH*0.50),
-      mkDisc(PFR - PW*0.13, PH*0.27),
-      mkDisc(PFR - PW*0.13, PH*0.73),
-      mkDisc(PFR - PW*0.29, PH*0.34),
-      mkDisc(PFR - PW*0.29, PH*0.66),
+      mkDisc(PFR - DR*1.4,  PH*0.50, 'o'),
+      mkDisc(PFR - PW*0.13, PH*0.27, 'o'),
+      mkDisc(PFR - PW*0.13, PH*0.73, 'o'),
+      mkDisc(PFR - PW*0.29, PH*0.34, 'o'),
+      mkDisc(PFR - PW*0.29, PH*0.66, 'o'),
     ],
     ball: { x: PW/2, y: PH/2, vx: 0, vy: 0, r: BR, mass: BALL_MASS }
   };
 }
 
+// ═══════════════════════════════════════════════
+// KRON ROOM
+// ═══════════════════════════════════════════════
 class KronRoom extends Room {
 
   onCreate(options) {
     this.maxClients = 2;
     this.seatReservationTime = 30;
-    this.gs = null;
-    this.roles = {}; // sessionId -> 'host' | 'guest'
-    this.started = false;
+    this.gs = null;       // game state
+    this.roles = {};      // sessionId -> 'host' | 'guest'
+    this.tickCount = 0;
 
-    // Client sends move input
     this.onMessage('move', (client, data) => {
-      if (!this.gs || this.gs.phase !== 'waiting') return;
+      if (!this.gs || this.gs.phase !== 'playing') return;
       const role = this.roles[client.sessionId];
       if (!role) return;
+
       const myTurn = role === 'host' ? 'p' : 'o';
       if (this.gs.turn !== myTurn) return;
+
       const arr = role === 'host' ? this.gs.PD : this.gs.OD;
       const disc = arr[data.discIdx];
       if (!disc) return;
+
       const speed = Math.sqrt(data.vx*data.vx + data.vy*data.vy);
-      if (!isFinite(speed) || speed < 0.05 || speed > MAX_SPEED*1.05) return;
+      if (!isFinite(speed) || speed < 0.05 || speed > MAX_SPEED * 1.05) return;
+
       disc.vx = data.vx;
       disc.vy = data.vy;
       this.gs.phase = 'simulating';
       this.gs.lastT = myTurn;
     });
 
-    // Client timeout pass
     this.onMessage('pass', (client) => {
-      if (!this.gs || this.gs.phase !== 'waiting') return;
+      if (!this.gs) return;
       const role = this.roles[client.sessionId];
       const myTurn = role === 'host' ? 'p' : 'o';
       if (this.gs.turn === myTurn) {
@@ -130,37 +142,26 @@ class KronRoom extends Room {
       }
     });
 
-    // 20fps physics + broadcast
+    // Physics + broadcast at 20fps
     this.setSimulationInterval((dt) => this.tick(dt), 50);
     console.log('KronRoom created');
   }
 
   onJoin(client, options) {
     const count = Object.keys(this.roles).length;
-
-    // Only allow 2 players
-    if (count >= 2) {
-      client.send('error', { msg: 'Room full' });
-      return;
-    }
-
     const role = count === 0 ? 'host' : 'guest';
     this.roles[client.sessionId] = role;
     client.send('role', { role });
     console.log(`${client.sessionId} joined as ${role}`);
 
-    // Start only when exactly 2 players
-    if (Object.keys(this.roles).length === 2 && !this.started) {
-      this.started = true;
-      setTimeout(() => this.startGame(), 500);
+    if (Object.keys(this.roles).length === 2) {
+      this.startGame();
     }
   }
 
-  onLeave(client, consented) {
+  onLeave(client) {
     const role = this.roles[client.sessionId];
     delete this.roles[client.sessionId];
-    this.started = false;
-    if (this.gs) this.gs.phase = 'paused';
     this.broadcast('opponent_left', { role });
     console.log(`${client.sessionId} (${role}) left`);
   }
@@ -174,32 +175,31 @@ class KronRoom extends Room {
       score: { p: 0, o: 0 },
       turn: 'p',
       lastT: 'p',
-      phase: 'waiting',   // waiting | simulating | goal_pause | paused
-      goalTimer: 0,
+      phase: 'waiting', // waiting | simulating | goal_pause
+      goalPauseTimer: 0,
       goalKickTeam: null,
     };
-    console.log('Game started');
     this.broadcast('state', this.snapshot('start'));
+    console.log('Game started');
   }
 
   tick(dt) {
     if (!this.gs) return;
     const gs = this.gs;
 
-    // Goal pause countdown
+    // Goal pause
     if (gs.phase === 'goal_pause') {
-      gs.goalTimer -= dt;
-      if (gs.goalTimer <= 0) {
+      gs.goalPauseTimer -= dt;
+      if (gs.goalPauseTimer <= 0) {
         if (gs.score.p >= WIN_SCORE || gs.score.o >= WIN_SCORE) {
           this.broadcast('state', this.snapshot('gameover'));
-          gs.phase = 'paused';
           return;
         }
         const pos = initPositions();
         gs.PD   = pos.PD;
         gs.OD   = pos.OD;
         gs.ball = pos.ball;
-        gs.turn  = gs.goalKickTeam;
+        gs.turn = gs.goalKickTeam;
         gs.lastT = gs.goalKickTeam;
         gs.phase = 'waiting';
         gs.goalKickTeam = null;
@@ -208,13 +208,17 @@ class KronRoom extends Room {
       return;
     }
 
-    // Paused or waiting — just send idle ping every 200ms
-    if (gs.phase === 'waiting' || gs.phase === 'paused') {
-      this.broadcast('state', this.snapshot('idle'));
+    // Waiting for move
+    if (gs.phase === 'waiting') {
+      // Still send state so clients stay in sync
+      this.tickCount++;
+      if (this.tickCount % 4 === 0) {
+        this.broadcast('state', this.snapshot('idle'));
+      }
       return;
     }
 
-    // === PHYSICS ===
+    // Simulating physics
     let anyMov = false;
     const allDiscs = gs.PD.concat(gs.OD);
 
@@ -238,8 +242,8 @@ class KronRoom extends Room {
     // Collisions
     const all = allDiscs.concat([b]);
     for (let pass = 0; pass < 3; pass++) {
-      for (let i = 0; i < all.length-1; i++) {
-        for (let j = i+1; j < all.length; j++) {
+      for (let i = 0; i < all.length - 1; i++) {
+        for (let j = i + 1; j < all.length; j++) {
           collide(all[i], all[j]);
         }
       }
@@ -249,37 +253,37 @@ class KronRoom extends Room {
     if (b.x - b.r <= PGD*0.25 && b.y > PGY1 && b.y < PGY2) {
       gs.score.o++;
       gs.phase = 'goal_pause';
-      gs.goalTimer = 1500;
+      gs.goalPauseTimer = 1500;
       gs.goalKickTeam = 'p';
-      allDiscs.forEach(d => { d.vx=0; d.vy=0; });
-      b.vx=0; b.vy=0;
+      allDiscs.forEach(d => { d.vx = 0; d.vy = 0; });
+      b.vx = 0; b.vy = 0;
       this.broadcast('state', this.snapshot('goal'));
       return;
     }
     if (b.x + b.r >= PW - PGD*0.25 && b.y > PGY1 && b.y < PGY2) {
       gs.score.p++;
       gs.phase = 'goal_pause';
-      gs.goalTimer = 1500;
+      gs.goalPauseTimer = 1500;
       gs.goalKickTeam = 'o';
-      allDiscs.forEach(d => { d.vx=0; d.vy=0; });
-      b.vx=0; b.vy=0;
+      allDiscs.forEach(d => { d.vx = 0; d.vy = 0; });
+      b.vx = 0; b.vy = 0;
       this.broadcast('state', this.snapshot('goal'));
       return;
     }
 
-    // Broadcast physics tick
+    // Broadcast tick
     this.broadcast('state', this.snapshot('tick'));
 
-    // Movement stopped
+    // Movement stopped — switch turn
     if (!anyMov) {
-      gs.turn  = gs.lastT === 'p' ? 'o' : 'p';
+      gs.turn = gs.lastT === 'p' ? 'o' : 'p';
       gs.lastT = gs.turn;
       gs.phase = 'waiting';
       this.broadcast('state', this.snapshot('turn_change'));
     }
   }
 
-  // Coordinates as ratio (0-1) — screen independent
+  // Snapshot — coordinates as ratio (0-1), screen independent
   snapshot(reason) {
     const gs = this.gs;
     return {
